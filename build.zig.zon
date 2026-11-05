@@ -1,0 +1,7 @@
+.{
+    .name = .ringbuf,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.18.0-dev",
+    .paths = .{""},
+    .fingerprint = 0xf45910e841075f92,
+}
