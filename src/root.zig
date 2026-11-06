@@ -3,7 +3,7 @@ const dynamic = @import("dynamic.zig");
 
 pub const StaticRingBuffer = static.StaticRingBuffer;
 pub const DynamicRingBuffer = dynamic.DynamicRingBuffer;
-pub const RingBufferError = dynamic.RingBufferError;
+pub const Error = dynamic.Error;
 
 test {
     const std = @import("std");
