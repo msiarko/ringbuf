@@ -3,8 +3,8 @@ const Atomic = std.atomic.Value;
 const cache_line = std.atomic.cache_line;
 const Allocator = std.mem.Allocator;
 
-/// Errors that can occur when initializing a [`DynamicRingBuffer`].
-pub const RingBufferError = error{ InvalidCapacity, OutOfMemory };
+/// Errors that can occur when working with a [`DynamicRingBuffer`].
+pub const Error = error{ InvalidCapacity, BufferIsFull } || Allocator.Error;
 
 /// A lock-free Single-Producer Single-Consumer (SPSC) ring buffer with runtime capacity.
 /// Note: Because one slot is used to distinguish full from empty, a buffer of length `cap`
@@ -22,15 +22,16 @@ pub fn DynamicRingBuffer(comptime T: type) type {
 
         /// Initializes a ring buffer backed by an existing slice `buf` (`buf.len` must be >= 2).
         /// The caller retains ownership of `buf`; do not call `deinit` on an instance created with `init`.
-        pub fn init(buf: []T) RingBufferError!Self {
-            if (buf.len < 2) return RingBufferError.InvalidCapacity;
+        pub fn init(buf: []T) Error!Self {
+            if (buf.len < 2) return Error.InvalidCapacity;
             return .{ .buf = buf };
         }
 
         /// Allocates a backing buffer of length `cap` (`cap` must be >= 2) using `gpa`.
+        /// Returns `Error.InvalidCapacity` when `cap` is less than 2
         /// Call `deinit` with the same allocator to free the backing memory.
-        pub fn initAlloc(gpa: Allocator, cap: usize) RingBufferError!Self {
-            if (cap < 2) return RingBufferError.InvalidCapacity;
+        pub fn initAlloc(gpa: Allocator, cap: usize) Error!Self {
+            if (cap < 2) return Error.InvalidCapacity;
             return .{ .buf = try gpa.alloc(T, cap) };
         }
 
@@ -42,29 +43,25 @@ pub fn DynamicRingBuffer(comptime T: type) type {
         }
 
         /// Attempts to push `item` into the ring buffer.
-        /// Returns `null` on success, or returns `item` back if the buffer is full.
-        pub fn tryPush(self: *Self, item: T) ?T {
+        /// Returns `Error.BufferIsFull` back if the buffer is full.
+        pub fn push(self: *Self, item: T) Error!void {
             const w_idx = self.write.load(.monotonic);
             const next_w_idx = (w_idx + 1) % self.buf.len;
 
-            if (next_w_idx == self.read.load(.acquire)) {
-                return item;
-            }
+            if (next_w_idx == self.read.load(.acquire))
+                return Error.BufferIsFull;
 
             self.buf[w_idx] = item;
             self.write.store(next_w_idx, .release);
-            return null;
         }
 
         /// Attempts to pop the oldest item from the ring buffer.
         /// Returns the popped item, or `null` if the buffer is empty.
-        pub fn tryPop(self: *Self) ?T {
+        pub fn pop(self: *Self) ?T {
             const r_idx = self.read.load(.monotonic);
             const w_idx = self.write.load(.acquire);
 
-            if (r_idx == w_idx) {
-                return null;
-            }
+            if (r_idx == w_idx) return null;
 
             const item = self.buf[r_idx];
             self.buf[r_idx] = undefined;
@@ -91,13 +88,13 @@ test "init with valid slice capacities" {
 test "init rejects capacities smaller than 2" {
     var empty_buf: [0]u8 = .{};
     try std.testing.expectError(
-        RingBufferError.InvalidCapacity,
+        Error.InvalidCapacity,
         DynamicRingBuffer(u8).init(&empty_buf),
     );
 
     var one_buf: [1]u8 = undefined;
     try std.testing.expectError(
-        RingBufferError.InvalidCapacity,
+        Error.InvalidCapacity,
         DynamicRingBuffer(u8).init(&one_buf),
     );
 }
@@ -116,11 +113,11 @@ test "initAlloc with valid capacities and deinit" {
 
 test "initAlloc rejects capacities smaller than 2" {
     try std.testing.expectError(
-        RingBufferError.InvalidCapacity,
+        Error.InvalidCapacity,
         DynamicRingBuffer(u8).initAlloc(std.testing.allocator, 0),
     );
     try std.testing.expectError(
-        RingBufferError.InvalidCapacity,
+        Error.InvalidCapacity,
         DynamicRingBuffer(u8).initAlloc(std.testing.allocator, 1),
     );
 }
@@ -128,7 +125,7 @@ test "initAlloc rejects capacities smaller than 2" {
 test "initAlloc propagates OutOfMemory" {
     var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
     try std.testing.expectError(
-        RingBufferError.OutOfMemory,
+        Error.OutOfMemory,
         DynamicRingBuffer(u64).initAlloc(failing.allocator(), 8),
     );
 }
