@@ -2,9 +2,7 @@ const std = @import("std");
 const Atomic = std.atomic.Value;
 const cache_line = std.atomic.cache_line;
 const Allocator = std.mem.Allocator;
-
-/// Errors that can occur when working with a [`DynamicRingBuffer`].
-pub const Error = error{ InvalidCapacity, BufferIsFull } || Allocator.Error;
+const Error = @import("error.zig").Error;
 
 /// A lock-free Single-Producer Single-Consumer (SPSC) ring buffer with runtime capacity.
 /// Note: Because one slot is used to distinguish full from empty, a buffer of length `cap`

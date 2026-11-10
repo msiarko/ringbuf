@@ -1,5 +1,6 @@
 const std = @import("std");
 const Atomic = std.atomic.Value;
+const Error = @import("error.zig").Error;
 
 const cache_line = std.atomic.cache_line;
 
@@ -25,18 +26,17 @@ pub fn StaticRingBuffer(comptime T: type, comptime N: usize) type {
         pub const init: Self = .{};
 
         /// Attempts to push `item` into the ring buffer.
-        /// Returns `null` on success, or returns `item` back if the buffer is full.
-        pub fn push(self: *Self, item: T) ?T {
+        /// Returns `error.BufferIsFull' if the buffer is full.
+        pub fn push(self: *Self, item: T) Error!void {
             const w_idx = self.write.load(.monotonic);
             const next_w_idx = (w_idx + 1) % N;
 
             if (next_w_idx == self.read.load(.acquire)) {
-                return item;
+                return Error.BufferIsFull;
             }
 
             self.buf[w_idx] = item;
             self.write.store(next_w_idx, .release);
-            return null;
         }
 
         /// Attempts to pop the oldest item from the ring buffer.
@@ -68,10 +68,9 @@ test "minimum capacity N = 2 holds 1 element and wraps around" {
 
     for (0..10) |cycle| {
         const item: u32 = @intCast(cycle * 10 + 1);
-        try std.testing.expectEqual(@as(?u32, null), rb.push(item));
+        try rb.push(item);
         // Buffer is now full (N - 1 = 1 item); next push must return the rejected item
-        try std.testing.expectEqual(@as(?u32, 999), rb.push(999));
-
+        try std.testing.expectError(Error.BufferIsFull, rb.push(999));
         try std.testing.expectEqual(@as(?u32, item), rb.pop());
         try std.testing.expectEqual(@as(?u32, null), rb.pop());
     }
@@ -83,12 +82,12 @@ test "FIFO order and full buffer rejection" {
 
     // Fill to usable capacity (N - 1)
     for (0..N - 1) |i| {
-        try std.testing.expectEqual(@as(?usize, null), rb.push(i + 100));
+        try rb.push(i + 100);
     }
 
     // Pushing when full returns the item back without overwriting
-    try std.testing.expectEqual(@as(?usize, 777), rb.push(777));
-    try std.testing.expectEqual(@as(?usize, 888), rb.push(888));
+    try std.testing.expectError(Error.BufferIsFull, rb.push(777));
+    try std.testing.expectError(Error.BufferIsFull, rb.push(888));
 
     // Pop all items and verify FIFO order
     for (0..N - 1) |i| {
@@ -109,7 +108,7 @@ test "interleaved push and pop across multiple wrap-arounds" {
     for (0..50) |_| {
         // Push 3 items
         for (0..3) |_| {
-            try std.testing.expectEqual(@as(?u64, null), rb.push(next_write));
+            try rb.push(next_write);
             next_write += 1;
         }
         // Pop 3 items
@@ -132,8 +131,8 @@ test "non-primitive element types (structs, slices, optionals, void)" {
     const m1: Message = .{ .id = 1, .name = "alpha", .flag = true };
     const m2: Message = .{ .id = 2, .name = "beta", .flag = null };
 
-    try std.testing.expectEqual(@as(?Message, null), msg_rb.push(m1));
-    try std.testing.expectEqual(@as(?Message, null), msg_rb.push(m2));
+    try msg_rb.push(m1);
+    try msg_rb.push(m2);
 
     const popped1 = msg_rb.pop().?;
     try std.testing.expectEqual(@as(u32, 1), popped1.id);
@@ -148,9 +147,9 @@ test "non-primitive element types (structs, slices, optionals, void)" {
 
     // Zero-sized type (void)
     var void_rb = StaticRingBuffer(void, 3).init;
-    try std.testing.expectEqual(@as(?void, null), void_rb.push({}));
-    try std.testing.expectEqual(@as(?void, null), void_rb.push({}));
-    try std.testing.expectEqual(@as(?void, {}), void_rb.push({})); // full
+    try void_rb.push({});
+    try void_rb.push({});
+    try std.testing.expectError(Error.BufferIsFull, void_rb.push({})); // full
     try std.testing.expectEqual(@as(?void, {}), void_rb.pop());
     try std.testing.expectEqual(@as(?void, {}), void_rb.pop());
     try std.testing.expectEqual(@as(?void, null), void_rb.pop());
@@ -180,11 +179,12 @@ test "concurrent SPSC stress test" {
         fn producerThread(rb: *TestBuffer) void {
             var val: u64 = 0;
             while (val < ItemCount) {
-                if (rb.push(val)) |_| {
+                rb.push(val) catch {
                     std.atomic.spinLoopHint();
-                } else {
-                    val += 1;
-                }
+                    continue;
+                };
+
+                val += 1;
             }
         }
 

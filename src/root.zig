@@ -1,9 +1,11 @@
 const static = @import("static.zig");
 const dynamic = @import("dynamic.zig");
+const @"error" = @import("error.zig");
+const Allocator = @import("std").mem.Allocator;
 
+pub const Error = @"error".Error;
 pub const StaticRingBuffer = static.StaticRingBuffer;
 pub const DynamicRingBuffer = dynamic.DynamicRingBuffer;
-pub const Error = dynamic.Error;
 
 test {
     const std = @import("std");
